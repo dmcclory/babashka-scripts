@@ -1,0 +1,24 @@
+#!/usr/bin/env bb
+(require '[babashka.cli :as cli])
+
+(def cli-options { :status { :default 200 } })
+
+(def statuses {200 {:status 200 :name "OK" :description "Successful response"}
+               201 {:status 201 :name "Created" :description "The request succeeded and a new resource was created as a result. This is typically the response sent after POST requests, or some PUT requests"}
+               202 {:status 202 :name "Accepted" :description "The request has been received but not yet acted upon. It is noncommittal, since there is no way in HTTP to later send an asynchronous response indicating the outcome of the request."}
+               404 {:status 404 :name "Uh Oh" :description "not successful response"}
+               })
+
+(def input (first *command-line-args*))
+
+(defn get-status [] (statuses (parse-long input)))
+
+(defn format-status [s]
+  (if (nil? s)
+    (println "you must provide an HTTP status code (0 - 5xx)")
+    (do (println (get s :status)":" (get s :name))
+        (println (get s :description)))))
+
+(if (nil? input)
+  (println "you must provide an HTTP status as the first argument")
+  (format-status (get-status)))
