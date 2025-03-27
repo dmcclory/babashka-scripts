@@ -1,5 +1,6 @@
 #!/usr/bin/env bb
 (require '[babashka.cli :as cli])
+(require '[bblgum.core :as b])
 
 (def cli-options { :status { :default 200 } })
 
@@ -27,7 +28,7 @@
 "200" {
   :status 200
   :name "OK"
-  :description "The request succeeded. The result and meaning of \"success\" depends on the HTTP method:\nGET: The resource has been fetched and transmitted in the message body.\nHEAD: Representation headers are included in the response without any message body.\nPUT or POST: The resource describing the result of the action is transmitted in the message body.\nTRACE: The message body contains the request as received by the server."
+  :description "The request succeeded. The result and meaning of \"success\" depends on the HTTP method:\n- GET: The resource has been fetched and transmitted in the message body.\n- HEAD: Representation headers are included in the response without any message body.\n- PUT or POST: The resource describing the result of the action is transmitted in the message body.\n- TRACE: The message body contains the request as received by the server."
 }
 "201" {
   :status 201
@@ -325,12 +326,14 @@
 
 (defn get-status [] (statuses input))
 
-(defn format-status [s]
+(defn format-markdown [s]
   (if (nil? s)
-    (println "you must provide an HTTP status code (0 - 5xx)")
-    (do (println (get s :status)":" (get s :name))
-        (println (get s :description)))))
+    (clojure.string/join "\n" ["you must provide an HTTP status code (10X - 50X)"])
+    (clojure.string/join "\n" [(clojure.string/join " " ["#" (get s :status) "-" (get s :name)]) (get s :description) ])))
+
+(defn render-markdown [m]
+  (b/gum :format :as :ignored :in m))
 
 (if (nil? input)
-  (println "you must provide an HTTP status as the first argument")
-  (format-status (get-status)))
+  (render-markdown "you must provide an HTTP status as the first argument")
+  (render-markdown (format-markdown (get-status))))
