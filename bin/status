@@ -2,8 +2,6 @@
 (require '[babashka.cli :as cli])
 (require '[bblgum.core :as b])
 
-(def cli-options { :status { :default 200 } })
-
 (def statuses {
 "100" {
   :status 100
