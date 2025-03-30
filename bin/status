@@ -1,6 +1,56 @@
 #!/usr/bin/env bb
+(require '[clojure.string :as string])
 (require '[babashka.cli :as cli])
+(require '[babashka.deps :as deps])
+(deps/add-deps '{:deps {io.github.lispyclouds/bblgum {:git/sha "b46455a5f40fa3e058376f38ddbd3cb9c45ff133"}}})
+
 (require '[bblgum.core :as b])
+
+
+(defn exceeds-threshold? [threshold words candidate]
+  (let [currentLength (count (string/join " " words))]
+    (> (+ currentLength (count candidate))
+        threshold)))
+
+(defn append-to-current [words candidate]
+  (conj words candidate))
+
+(defn start-line [lines candidate]
+  (into lines [[candidate]]))
+
+(defn append-or-start-new-line [threshold lines candidate]
+  (if (exceeds-threshold? threshold (last lines) candidate)
+    (start-line lines candidate)
+    (into (pop lines) [(append-to-current (last lines) candidate)])))
+
+; this was fun to write
+; the loop has a few parts
+; the function is called loop
+; a vector of bindings
+; the bindings setup a mapping from names to values
+; the bindings are the initial values that are used in the loop
+; then there is a function call that acts as the block of code that will
+; the recur function is used to proceed to the next invocation of the block
+(defn split-into-lines [threshold words]
+  (loop [lines [[]]
+         candidate (first words)
+         to-process (rest words)]
+    (if (nil? candidate)
+      lines
+      (recur (append-or-start-new-line threshold lines candidate)
+             (first to-process)
+             (rest to-process)))))
+
+
+(defn line-join [line]
+  (string/join " " line))
+
+(defn convert-to-string [lines]
+  (string/join "\n" (map line-join lines)))
+
+(defn break-into-lines [threshold text]
+  (convert-to-string (split-into-lines threshold (string/split text #" "))))
+
 
 (def statuses {
 "100" {
@@ -320,6 +370,17 @@
 }
 })
 
+(defn markdown-para? [line]
+  (not (re-find #"^[-#*]" line)))
+
+(defn line-break-paragraph [line]
+  (if (markdown-para? line)
+    (break-into-lines 100 line)
+    line))
+
+(defn split-long-paras [description]
+  (string/join "\n" (map line-break-paragraph (string/split description #"\n"))))
+
 (def input (first *command-line-args*))
 
 (defn get-status [] (statuses input))
@@ -327,7 +388,7 @@
 (defn format-markdown [s]
   (if (nil? s)
     (clojure.string/join "\n" ["you must provide an HTTP status code (10X - 50X)"])
-    (clojure.string/join "\n" [(clojure.string/join " " ["#" (get s :status) "-" (get s :name)]) (get s :description) ])))
+    (clojure.string/join "\n" [(clojure.string/join " " ["#" (get s :status) "-" (get s :name)]) (split-long-paras (get s :description)) ])))
 
 (defn render-markdown [m]
   (b/gum :format :as :ignored :in m))
