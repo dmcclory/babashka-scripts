@@ -26,4 +26,4 @@ these scripts are now available:
 
 
 - `uuid`: returns a random uuid
-- `status 202`: given an HTTP status, returns it's description
+- `http-status 202`: given an HTTP status, returns it's description
