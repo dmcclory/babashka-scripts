@@ -1,0 +1,25 @@
+#!/usr/bin/env bb
+
+;; based on this gist
+;; https://gist.github.com/cnirrad/fa69722d1549246381039d188165335a
+
+(require '[clojure.string :as string])
+(require '[babashka.cli :as cli])
+(require '[babashka.deps :as deps])
+
+(deps/add-deps '{:deps {io.github.lispyclouds/bblgum {:git/sha "b46455a5f40fa3e058376f38ddbd3cb9c45ff133"}}})
+(require '[bblgum.core :as b])
+
+(def input (first *command-line-args*))
+
+(defn decode [data] (String. (.decode (java.util.Base64/getUrlDecoder) (.getBytes data))))
+
+(def segments (string/split input #"\."))
+
+(defn format [text color]
+  (first (get (b/gum :style [text] :foreground color) :result)))
+
+(println "")
+(println (format (decode (first segments)) 212))
+(println (format (decode (second segments)) 123))
+(println (format "skipping the 3rd section of the JWT" 118))
