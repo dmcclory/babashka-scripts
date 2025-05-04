@@ -1,0 +1,31 @@
+#!/usr/bin/env bb
+(require '[babashka.cli :as cli])
+(require '[clojure.string :as string])
+(:require 'babashka.process)
+
+;; at some point I will learn to use babashka.process/process, but
+;; the sh function returns a string and that is all I need
+(use '[clojure.java.shell :only [sh]])
+
+(def k8-shell (get (sh "kubectl" "get" "pods" "-o" "json") :out))
+(def k8-result (json/parse-string k8-shell))
+
+(defn get-pod-names [] 
+  (let [ k8-shell (get (sh "kubectl" "get" "pods" "-o" "json") :out)
+         k8-response (json/parse-string k8-shell)]
+    (map (fn [item] (get (get item "metadata") "name")) (get k8-response "items"))))
+
+(defn find-pod-name [pod-alias]
+  (let [pod-names (get-pod-names)]
+    (first (filter (fn [pod] (string/starts-with? pod pod-alias)) pod-names ))))
+
+(defn arguments-rewrite [real-pod-name] 
+  (let [command-name (first *command-line-args*)
+        remainder (rest (rest *command-line-args*))]
+    (concat ["kubectl" command-name real-pod-name] remainder)))
+
+(let [pod-alias (second *command-line-args*)
+      real-pod-name (find-pod-name pod-alias) ]
+  (if (nil? real-pod-name)
+    (println "exiting. not able to find a pod for:" pod-alias)
+    (babashka.process/exec (arguments-rewrite real-pod-name))))
