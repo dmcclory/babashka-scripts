@@ -1,0 +1,414 @@
+#!/usr/bin/env bb
+
+(ns todo
+  (:require [babashka.http-client :as http]
+            [babashka.cli :as cli]
+            [babashka.fs :as fs]
+            [babashka.process :refer [shell]]
+            [cheshire.core :as json]
+            [clojure.string :as string]
+            [bblgum.core :as b]))
+
+(defn build-url [segments] (string/join "/" (concat ["http://localhost:8000" segments])))
+(defn build-api-url [segments] (string/join "/" (concat ["http://localhost:8000" "api"] segments)))
+
+(defn load-projects [] (json/parse-string (:body (http/get "http://localhost:8000/api/projects"))))
+
+(defn load-project [project-id] (json/parse-string (:body (http/get (build-api-url ["projects" project-id])))))
+
+(defn load-subproject [project-id subproject-id]
+  (json/parse-string (:body (http/get (build-api-url ["projects" project-id subproject-id])))))
+
+(defn load-search-results [search-text]
+  (json/parse-string (:body (http/get (build-api-url ["search"])
+                                      {:query-params {"input" search-text}}))))
+
+(defn create-task [project-id subproject-id description]
+  (http/post (build-api-url ["next_actions"])
+             {:form-params {:project_id project-id
+                            :subproject_id subproject-id
+                             :description description}}))
+ 
+(defn mark-task-completed-status [project-id subproject-id uuid-prefix status]
+  (let [subproject (load-subproject project-id subproject-id)
+        uuid  (first (filter (fn [u] (string/starts-with? u uuid-prefix))
+                             (map (fn [n] (n "uuid")) (subproject "next_actions"))))]
+    (if (nil? uuid)
+      (println "not able to find a task matching: " uuid-prefix)
+      (http/post (build-api-url ["next_actions" uuid])
+                 {:form-params {:next_action_uuid uuid
+                                :project_id project-id
+                                :subproject_id subproject-id
+                                :completed_status status}}))))
+
+(defn update-subproject [project-id subproject-id subproject-attrs]
+  (http/post (build-api-url ["subprojects" subproject-id])
+             {:form-params (merge subproject-attrs {"project_id" project-id "subproject_id" subproject-id})}))
+
+(defn update-subproject-notes [project-id subproject-id contents]
+  (http/post (build-api-url ["subprojects" "notes"])
+             {:form-params {"project_id" project-id
+                            "subproject_id" subproject-id
+                            "note_text" contents}}))
+
+(defn update-project-goal-section-notes [project-id section contents]
+  (http/post (build-api-url ["project_goals"])
+             {:form-params {"project_id" project-id
+                            "header_key" section
+                            "section_text" contents}}))
+
+
+(defn print-active-projects
+  []
+  (let [projects (load-projects)
+        active-projects     (filter #(= "active" (% "status")) projects)
+        backburner-projects (filter #(= "backburner" (% "status")) projects)]
+    (doseq [project (concat active-projects backburner-projects)]
+      (println (project "name") "|" (project "status")))))
+
+
+(defn format-next-actions [next-actions]
+  (doseq [na (sort-by (fn [a] (a "rank")) next-actions)]
+    (let [description (na "description")
+          completed (na "completed_status")
+          uuid (subs (na "uuid") 0 5)
+          mark (if (= completed "complete") "x" " ")]
+      (println (string/join ["- [" mark "] " description " (" uuid ")"])))))
+
+
+(defn format-subproject [subproject-resp]
+  (let [sp (subproject-resp "subproject")]
+    (println "")
+    (println (sp "name"))
+    (println (string/join "/" [(subproject-resp "id") (subproject-resp "subproject_id")]))
+    (println "")
+    (println "created at:" (sp "created_at"))
+    (println "progress:" (sp "progress"))
+    (println "")
+    (format-next-actions (subproject-resp "next_actions"))))
+
+;;------------------------------------------------
+
+(defn projects [_m]
+  (print-active-projects))
+
+(def todo-data-path
+  (let [user-home (System/getProperty "user.home")
+        path (string/join "/" [user-home ".babashka_todo_data.json"])]
+    path))
+
+(defn read-default-data []
+  (when (not (fs/exists? todo-data-path))
+    (spit todo-data-path (json/generate-string {})))
+  (json/parse-string (slurp todo-data-path)))
+
+(defn print-config [_m]
+  (let [data (read-default-data)]
+    (print data)))
+
+(defn set-config [m]
+  (let [defaults (read-default-data)
+        key (first (:args m))
+        value (second (:args m))]
+    (println "going to update " (assoc defaults key value))
+    (spit todo-data-path (json/generate-string (assoc defaults key value)))))
+
+
+(defn project-params [m]
+  (let [defaults (read-default-data)
+        project-id (or (:project-id (:opts m)) (defaults "default_project_id"))
+        subproject-id (or (:subproject-id (:opts m)) (defaults "default_subproject_id"))]
+    {:project-id project-id :subproject-id subproject-id}))
+
+
+(defn tasks [m]
+  (let [params (project-params m)]
+    (format-subproject (load-subproject (params :project-id) (params :subproject-id)))))
+
+(defn task-add [m]
+  (let [params (project-params m)
+        description (first (:args m))]
+    (if (nil? (params :project-id))
+      (println "not able to find a project - either add `--project-id` flag or set a default project" m)
+      (create-task (params :project-id) (params :subproject-id) description))))
+
+(defn task-complete [m]
+  (let [params (project-params m)
+        uuid-prefix (first (:args m))]
+    (if (nil? (params :project-id))
+      (println "not able to find a project - either add `--project-id` flag or set a default project" m)
+      (mark-task-completed-status (params :project-id) (params :subproject-id) uuid-prefix "complete"))))
+
+(defn task-delete [m]
+  (let [params (project-params m)
+        uuid-prefix (first (:args m))]
+    (if (nil? (params :project-id))
+      (println "not able to find a project - either add `--project-id` flag or set a default project" m)
+      (mark-task-completed-status (params :project-id) (params :subproject-id) uuid-prefix "trashed"))))
+
+(defn format-section-with-header [section notes]
+  (string/join "\n" [(string/upper-case section) notes]))
+
+(defn format-project-notes [project section]
+  (if (nil? section)
+    (println (string/join "\n" (map (fn [s] (format-section-with-header (s "goal_type") (s "text"))) (vals (project "goals")))))
+    (let [s (get-in project ["goals" section])]
+      (println (format-section-with-header (s "goal_type") (s "text"))))))
+
+(defn project-notes [m]
+  (let [params (project-params m)
+        section (first (:args m))]
+    (if (nil? (params :project-id))
+      (println "not able to find a project - either add `--project-id` flag or set a default project" m)
+      (format-project-notes (load-project (get params :project-id))
+                            section))))
+
+(defn subproject-detail-row [sp]
+  (string/join " | " [(get sp "name")
+                      (get sp "progress")
+                      (get sp "id")]))
+
+(defn project-details [m]
+  (let [params (project-params m)
+        project-resp (load-project (get params :project-id))
+        project (get project-resp "project")
+        subprojects (get project-resp "subprojects")
+        show-all (get-in m [:opts :show-all])
+        finished-subprojects (filter (fn [sp] (>= (get sp "progress") 100))
+                                     subprojects)
+        unstarted-subprojects (filter (fn [sp] (= 0 (get sp "progress")))
+                                      subprojects)
+        inprogress-subprojects (filter (fn [sp] (let [p (get sp "progress")] (and (> 100 p) (> p 0))))
+                                       subprojects)]
+    (println m)
+    (println "\n")
+    (println (keys (get project-resp "project")))
+    (println (get project "name"))
+    (println "created at:" (get project "created_at"))
+    (println "started at:" (get project "started_at"))
+    (println "status:" (or (get project "status") ""))
+    (println "\n---------------")
+    (println "\nin progress")
+    (println (string/join "\n" (map subproject-detail-row (reverse (sort-by #(get % "progress") inprogress-subprojects)))))
+    (println "\nunstarted")
+    (println (string/join "\n" (map subproject-detail-row unstarted-subprojects)))
+    (when show-all
+      (println "\nfinished")
+      (println (string/join "\n" (map subproject-detail-row finished-subprojects))))))
+
+(defn format-subproject-notes [subproject]
+  (println (format-section-with-header (get-in subproject ["subproject" "name"]) (get subproject "notes"))))
+
+(defn subproject-notes [m]
+  (let [params (project-params m)
+        subproject (load-subproject (get params :project-id) (get params :subproject-id))]
+    (if (nil? (params :project-id))
+      (println "not able to find a project - either add `--project-id` flag or set a default project" m)
+      (format-subproject-notes subproject))))
+
+(defn handle-subproject-update [m attr]
+  (let [params (project-params m)
+        project-id (get params :project-id)
+        subproject-id (get params :subproject-id)
+        new-value (first (get m :args))
+        subproject (load-subproject project-id subproject-id)
+        current-values (select-keys (get subproject "subproject")
+                                    ["progress" "active" "name" "priority"])
+        post-body (merge current-values {attr new-value})]
+    (if (nil? new-value)
+      (println "nothing given to update ... exiting")
+      (update-subproject project-id subproject-id post-body))))
+
+
+(defn subproject-update-progress [m]
+  (handle-subproject-update m "progress"))
+
+(defn subproject-update-priority [m]
+  (handle-subproject-update m "priority"))
+
+(defn subproject-update-name [m]
+  (handle-subproject-update m "name"))
+
+(defn subproject-update-active [m]
+  (handle-subproject-update m "active"))
+
+(defn format-hit [h]
+  (let [result (string/join "\n" [(string/join  ["### " (h "title")])
+                                  (build-url (h "slug"))
+                                  (h "date")
+                                  (h "contents")
+                                  "\n"
+                                  "\n"
+                                  "\n"])]
+    (b/gum :format :as :ignored :in result)))
+
+(defn search-notes [m]
+  (let [terms (:args m)
+        results (load-search-results terms)
+        joined (string/join "\n" (map (fn [h] (format-hit h))
+                                      (results "hits")))]
+    joined))
+
+
+
+(defn bulk-edit-message-instructions [] "
+# Commands:
+# c, complete <uuid> = mark action with uuid as complete
+# u, unstart <uuid> = mark action with uuid as unstarted
+# t, trashed <uuid> = mark action with uuid as trashed
+
+# You can change description of a task by altering everything after the task id
+
+# These lines can be re-ordered; they will be re-ranked from top to bottom.
+
+# If you remove a line here that task will be DELETED/TRASHED
+# However, if you remove everything, the update will be aborted.
+")
+
+(defn expand-action [v]
+  (case v
+    "unstarted" v
+    "complete" v
+    "trashed" v
+    "u" "unstarted"
+    "c" "complete"
+    "t" "trashed"
+    "unstarted"))
+
+(defn parse-line [l]
+  (let [components (string/split l #" ?\| ?")]
+    (case (count components)
+       1 {:description l}
+       3 {:completed_status (expand-action (nth components 0))
+          :uuid (nth components 1)
+          :description (nth components 2)}
+      {:error true})))
+
+(defn expand-uuid [na task-uuids]
+  (if (nil? (na :uuid))
+    na
+    (assoc na :uuid (some (fn [u]
+                            (when (string/starts-with? u (na :uuid))
+                              u))
+                          task-uuids))))
+
+(defn any-invalid-line? [lines]
+  (some (fn [l] (= {:error true} l)) lines))
+
+(defn any-mismatched-uuids? [lines task-uuids]
+  (let [non-nil-uuids (filter (fn [u] (some? u))
+                        (map (fn [l] (l :uuid)) lines))
+        task-map (into {} (map (fn [u] [(subs u 0 5) u]) task-uuids))]
+    (not-every? (fn [u] (task-map u)) non-nil-uuids)))
+
+
+(defn parse-bulk-update-file [raw-contents task-uuids]
+  (let [raw-lines (string/split-lines raw-contents)
+        non-blank-lines (filter (fn [l] (not (re-matches #"^\w*$" l))) raw-lines)
+        non-comment-lines (filter (fn [l] (not (string/starts-with? l "#")))
+                                  non-blank-lines)
+        parsed-lines (map (fn [l] (parse-line l)) non-comment-lines)
+        with-expanded-uuids (map (fn [na] (expand-uuid na task-uuids)) parsed-lines)]
+    (cond
+      (any-invalid-line? parsed-lines) {:error true}
+      (any-mismatched-uuids? parsed-lines task-uuids) {:error true}
+      :else with-expanded-uuids)))
+
+
+(defn bulk-update-message-next-action-line [na]
+  (string/join " | " [(na "completed_status")
+                      (subs (na "uuid") 0 5)
+                      (na "description")]))
+
+(defn build-bulk-update-message [next_actions]
+  (let [na-lines (vec (map bulk-update-message-next-action-line next_actions))]
+    (string/join "\n" (conj na-lines (bulk-edit-message-instructions)))))
+
+(defn post-bulk-update [params]
+  (let [{project-id :project-id
+         subproject-id :subproject-id
+         next-actions :next-actions} params
+        url (build-api-url ["next_actions" "bulk_update"])
+        data {:project_id project-id
+              :subproject_id subproject-id
+              :next_actions next-actions}]
+    (http/post url {:headers {:content-type "application/json"}
+                    :body (json/encode data)})))
+
+
+;; learned how to use the result of fs/create-temp-file from these two libraries:
+;; https://github.com/vortext/esther/blob/cbd88526d519f1d369401bc5235b2fb71a90af5f/src/clj/vortext/esther/util/native.clj#L53
+;; https://github.com/NoahTheDuke/coc-clojure/blob/effa179688234e91526249f4ffd2163e91271014/bin/build_commands.clj#L28
+
+(defn present-contents-in-editor [contents prefix]
+  (let [editor (or (System/getenv "EDITOR") "vi")
+        tempfile (str (fs/delete-on-exit (fs/create-temp-file {:prefix prefix})))]
+    (spit tempfile contents)
+    (shell editor tempfile)
+    (slurp tempfile)))
+
+(defn edit-tasks [m]
+  (let [params (project-params m)
+        subproject (load-subproject (params :project-id) (params :subproject-id))
+        next-actions (sort-by (fn [v] (v "rank")) (subproject "next_actions"))
+        contents (build-bulk-update-message next-actions)
+        task-uuids (map (fn [na] (na "uuid")) next-actions)
+        updated-contents (present-contents-in-editor contents "todo-bulk-update")
+        parsed-contents (parse-bulk-update-file updated-contents task-uuids)]
+      (if (= {:error true} parsed-contents)
+        (println "exiting - error while parsing the text")
+        (post-bulk-update (conj params {:next-actions parsed-contents})))))
+
+(defn subproject-edit-notes [m]
+  (let [params (project-params m)
+        project-id (get params :project-id)
+        subproject-id (get params :subproject-id)
+        subproject (load-subproject project-id subproject-id)
+        contents (get subproject "notes")
+        updated-contents (present-contents-in-editor contents "subproject-notes-edit")]
+    (update-subproject-notes project-id subproject-id updated-contents))) 
+
+(defn project-edit-goal-section [m]
+  (let [params (project-params m)
+        project-id (get params :project-id)
+        section (first (:args m))
+        project (load-project project-id)
+        contents (get-in project ["goals" section "text"])
+        updated-contents (present-contents-in-editor contents "project-edit-goal-section")]
+    (update-project-goal-section-notes project-id section updated-contents)))
+
+(defn help [m]
+  (println "I am help")
+  (assoc m :fn :help))
+
+(def table
+  [{:cmds ["tasks"]                           :fn tasks           :args->opts [:project-id :subproject-id]}
+   {:cmds ["tasks" "add"]                     :fn task-add}
+   {:cmds ["tasks" "complete"]                :fn task-complete}
+   {:cmds ["tasks" "delete"]                  :fn task-delete}
+   {:cmds ["tasks" "edit"]                    :fn edit-tasks}
+   {:cmds ["config"]                          :fn print-config}
+   {:cmds ["config" "set"]                    :fn set-config}
+   {:cmds ["projects"]                        :fn projects        :args->opts [:project-id :subproject-id]}
+   {:cmds ["project" "details"]               :fn project-details}
+   {:cmds ["project" "notes"]                 :fn project-notes}
+   {:cmds ["project" "notes" "edit"]          :fn project-edit-goal-section}
+   {:cmds ["subproject" "notes"]              :fn subproject-notes}
+   {:cmds ["subproject" "notes" "edit"]       :fn subproject-edit-notes}
+   {:cmds ["subproject" "active"]             :fn subproject-update-active}
+   {:cmds ["subproject" "name"]               :fn subproject-update-name}
+   {:cmds ["subproject" "priority"]           :fn subproject-update-priority}
+   {:cmds ["subproject" "progress"]           :fn subproject-update-progress}
+   {:cmds ["subproject"]                      :fn tasks}
+   {:cmds ["search"]                          :fn search-notes}
+   {:cmds []                                  :fn help}])
+
+;; learned how to do this from https://github.com/babashka/neil/blob/main/neil
+;; the ideas are
+;; 1) main passes the command-line-args to cli/dispatch
+(defn -main [& _args]
+  (cli/dispatch table *command-line-args* {:coerce {:depth :long}}))
+
+;; not sure what this property should be, but the logic makes sense
+(when (= *file* (System/getProperty "babashka.file"))
+  (-main))
