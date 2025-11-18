@@ -9,7 +9,7 @@
             [clojure.string :as string]
             [bblgum.core :as b]))
 
-(defn build-url [segments] (string/join "/" (concat ["http://localhost:8000" segments])))
+(defn build-url [segments] (string/join "/" (concat ["http://localhost:8000"] segments)))
 (defn build-api-url [segments] (string/join "/" (concat ["http://localhost:8000" "api"] segments)))
 
 (defn load-projects [] (json/parse-string (:body (http/get "http://localhost:8000/api/projects"))))
@@ -29,6 +29,12 @@
                             :subproject_id subproject-id
                              :description description}}))
  
+(defn create-subproject [project-id subproject-name]
+  (let [url (build-url ["projects" project-id])]
+    (println "url is: " url))
+  (http/post (build-url ["projects" project-id])
+             {:form-params {"name" subproject-name "progress" 0}}))
+
 (defn mark-task-completed-status [project-id subproject-id uuid-prefix status]
   (let [subproject (load-subproject project-id subproject-id)
         uuid  (first (filter (fn [u] (string/starts-with? u uuid-prefix))
@@ -196,6 +202,12 @@
       (println "\nfinished")
       (println (string/join "\n" (map subproject-detail-row finished-subprojects))))))
 
+(defn subproject-create [m]
+  (let [params (project-params m)
+        sp-name (string/join " " (get m :args))]
+    (println "going to add to add '"sp-name"' to a a new subproject")
+    (create-subproject (get params :project-id) sp-name)))
+
 (defn format-subproject-notes [subproject]
   (println (format-section-with-header (get-in subproject ["subproject" "name"]) (get subproject "notes"))))
 
@@ -234,7 +246,7 @@
 
 (defn format-hit [h]
   (let [result (string/join "\n" [(string/join  ["### " (h "title")])
-                                  (build-url (h "slug"))
+                                  (build-url [(h "slug")])
                                   (h "date")
                                   (h "contents")
                                   "\n"
@@ -393,6 +405,7 @@
    {:cmds ["project" "details"]               :fn project-details}
    {:cmds ["project" "notes"]                 :fn project-notes}
    {:cmds ["project" "notes" "edit"]          :fn project-edit-goal-section}
+   {:cmds ["subproject" "create"]             :fn subproject-create}
    {:cmds ["subproject" "notes"]              :fn subproject-notes}
    {:cmds ["subproject" "notes" "edit"]       :fn subproject-edit-notes}
    {:cmds ["subproject" "active"]             :fn subproject-update-active}
