@@ -1,0 +1,11 @@
+- [x] easy setup on another computer
+- [ ] gum for nice formatting (and charm? https://charm.sh)
+  - https://github.com/charmbracelet/gum
+- [ ] links to the entries in https://httpwg.org/specs/rfc9110.html#status.2xx
+- [ ] 41X pattern matching
+- [ ] nicer terminal formatting
+- [ ]
+
+- [ ] also someday:
+- [ ] hill chart generation!
+- [ ] is there a good way to use 
